@@ -1,6 +1,14 @@
+# This fork
+
+This fork was created to change the project to deploy without codeCommit repository in AWS, since it is not available for new users.
+
+The current state allows the cdk build to complete and all the infra is working, but the studio due to changes at the studio and amplify.
+It is possible to run the studio locally with the deployed credentials
+
+[Original Repo](https://github.com/supabase-community/supabase-on-aws)
 # Supabase on AWS - CloudFormation/CDK Template
 
-_Launch in minutes. Scale to millions._
+_Launch in minutes. Scale to millions._ (A little bit more than a few minutes, but it is worth it)
 
 This repo includes a template of starting Supabase stack on AWS via CloudFormation/CDK. This template use managed services such as Amazon ECS and Amazon Aurora etc...
 

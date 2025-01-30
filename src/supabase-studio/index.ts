@@ -3,14 +3,16 @@ import * as amplify from '@aws-cdk/aws-amplify-alpha';
 import * as cdk from 'aws-cdk-lib';
 import { BuildSpec } from 'aws-cdk-lib/aws-codebuild';
 import * as codecommit from 'aws-cdk-lib/aws-codecommit';
+import * as codebuild from 'aws-cdk-lib/aws-codebuild';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { ISecret } from 'aws-cdk-lib/aws-secretsmanager';
 import { StringParameter } from 'aws-cdk-lib/aws-ssm';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
+import { SecretValue } from 'aws-cdk-lib';
 
-interface SupabaseStudioProps {
+export interface SupabaseStudioProps {
   sourceBranch?: string;
   appRoot?: string;
   supabaseUrl: string;
@@ -31,32 +33,32 @@ export class SupabaseStudio extends Construct {
   constructor(scope: Construct, id: string, props: SupabaseStudioProps) {
     super(scope, id);
 
-    const buildImage = 'public.ecr.aws/sam/build-nodejs18.x:latest';
-    const sourceRepo = 'https://github.com/supabase/supabase.git';
+    const buildImage = 'public.ecr.aws/sam/build-nodejs20.x:1.132.0-20241211194259';
+    const sourceRepo = 'supabase';
     const sourceBranch = props.sourceBranch ?? 'master';
-    const appRoot = props.appRoot ?? 'studio';
+    const appRoot = props.appRoot ?? 'apps/studio';
     const { supabaseUrl, dbSecret, anonKey, serviceRoleKey } = props;
-
-    /** CodeCommit - Source Repository for Amplify Hosting */
-    const repository = new Repository(this, 'Repository', {
-      repositoryName: cdk.Aws.STACK_NAME,
-      description: `${this.node.path}/Repository`,
-    });
-
-    /** Import from GitHub to CodeComit */
-    const repoImportJob = repository.importFromUrl(sourceRepo, sourceBranch);
 
     /** IAM Role for SSR app logging */
     const role = new iam.Role(this, 'Role', {
       description: 'The service role that will be used by AWS Amplify for SSR app logging.',
       path: '/service-role/',
-      assumedBy: new iam.ServicePrincipal('amplify.amazonaws.com'),
+      assumedBy: new iam.CompositePrincipal(
+        new iam.ServicePrincipal('amplify.amazonaws.com'),
+        new iam.ServicePrincipal(`amplify.${cdk.Stack.of(this).region}.amazonaws.com`)
+      ),
     });
 
-    // Allow the role to access Secret and Parameter
+    // Add managed policy for Amplify
+    role.addManagedPolicy(
+      iam.ManagedPolicy.fromAwsManagedPolicyName('AdministratorAccess-Amplify')
+    );
+
+    // Keep your existing permissions
     dbSecret.grantRead(role);
     anonKey.grantRead(role);
     serviceRoleKey.grantRead(role);
+
 
     /** BuildSpec for Amplify Hosting */
     const buildSpec = BuildSpec.fromObjectToYaml({
@@ -73,36 +75,33 @@ export class SupabaseStudio extends Construct {
                 'env | grep -e STUDIO_PG_META_URL >> .env.production',
                 'env | grep -e SUPABASE_ >> .env.production',
                 'env | grep -e NEXT_PUBLIC_ >> .env.production',
-                'cd ../',
-                'npx turbo@1.10.3 prune --scope=studio',
-                'npm clean-install',
+                'cd apps/studio',
+                'npx pnpm install',
               ],
             },
             build: {
               commands: [
-                'npx turbo run build --scope=studio --include-dependencies --no-deps',
+                'npx turbo run build --filter=studio',
                 'npm prune --omit=dev',
+                'ls -la',
+                'pwd'
               ],
             },
             postBuild: {
               commands: [
-                `cd ${appRoot}`,
-                `rsync -av --ignore-existing .next/standalone/${repository.repositoryName}/${appRoot}/ .next/standalone/`,
-                `rsync -av --ignore-existing .next/standalone/${repository.repositoryName}/node_modules/ .next/standalone/node_modules/`,
-                `rm -rf .next/standalone/${repository.repositoryName}`,
-                'cp .env .env.production .next/standalone/',
-                // https://nextjs.org/docs/advanced-features/output-file-tracing#automatically-copying-traced-files
-                'rsync -av --ignore-existing public/ .next/standalone/public/',
-                'rsync -av --ignore-existing .next/static/ .next/standalone/.next/static/',
+                "echo 'Build completed on date'",
+                `echo "Checking build artifacts..."`,
+                `ls -la .next || echo ".next directory not found"`
               ],
             },
           },
           artifacts: {
-            baseDirectory: '.next',
+            baseDirectory: 'apps/studio/.next',
             files: ['**/*'],
           },
           cache: {
             paths: [
+              '.next/cache/**/*',
               'node_modules/**/*',
             ],
           },
@@ -113,7 +112,11 @@ export class SupabaseStudio extends Construct {
     this.app = new amplify.App(this, 'App', {
       appName: this.node.path.replace(/\//g, ''),
       role,
-      sourceCodeProvider: new amplify.CodeCommitSourceCodeProvider({ repository }),
+      sourceCodeProvider: new amplify.GitHubSourceCodeProvider({
+        owner: 'rcmschiavi',
+        repository: sourceRepo,
+        oauthToken: SecretValue.secretsManager('my-github-token'),
+      }),
       buildSpec,
       environmentVariables: {
         // for Amplify Hosting Build
@@ -139,7 +142,7 @@ export class SupabaseStudio extends Construct {
     (this.app.node.defaultChild as cdk.CfnResource).addPropertyOverride('Platform', 'WEB_COMPUTE');
 
     this.prodBranch = this.app.addBranch('ProdBranch', {
-      branchName: 'main',
+      branchName: 'master',
       stage: 'PRODUCTION',
       autoBuild: true,
       environmentVariables: {
@@ -147,8 +150,6 @@ export class SupabaseStudio extends Construct {
       },
     });
     (this.prodBranch.node.defaultChild as cdk.CfnResource).addPropertyOverride('Framework', 'Next.js - SSR');
-
-    repoImportJob.node.addDependency(this.prodBranch.node.defaultChild!);
 
     /** IAM Policy for SSR app logging */
     const amplifySSRLoggingPolicy = new iam.Policy(this, 'AmplifySSRLoggingPolicy', {
@@ -174,6 +175,29 @@ export class SupabaseStudio extends Construct {
     amplifySSRLoggingPolicy.attachToRole(role);
 
     this.prodBranchUrl = `https://${this.prodBranch.branchName}.${this.app.defaultDomain}`;
+
+    // Add additional permissions that Amplify might need
+    role.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'amplify:*',
+        'cloudfront:CreateCloudFrontOriginAccessIdentity',
+        'cloudfront:GetCloudFrontOriginAccessIdentity',
+        'cloudfront:DeleteCloudFrontOriginAccessIdentity',
+        'cloudfront:UpdateCloudFrontOriginAccessIdentity',
+        's3:CreateBucket',
+        's3:DeleteBucket',
+        's3:PutBucketPolicy',
+        's3:DeleteBucketPolicy',
+        's3:PutBucketWebsite',
+        's3:PutBucketVersioning',
+        's3:GetBucketVersioning',
+        's3:PutLifecycleConfiguration',
+        's3:GetLifecycleConfiguration',
+        's3:DeleteBucketWebsite'
+      ],
+      resources: ['*']
+    }));
   }
 
 }
