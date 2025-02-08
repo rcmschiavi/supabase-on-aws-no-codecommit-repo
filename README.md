@@ -1,9 +1,17 @@
 # This fork
 
-This fork was created to change the project to deploy without codeCommit repository in AWS, since it is not available for new users.
+This fork was created to modify the project to deploy without using a CodeCommit repository in AWS, as it is not available for new users.
 
-The current state allows the cdk build to complete and all the infra is working, but the studio due to changes at the studio and amplify.
-It is possible to run the studio locally with the deployed credentials
+The current state allows the CDK build to complete, and all the infrastructure is working, but the studio is not functional due to changes in the studio and Amplify.
+It is possible to run the studio locally with the deployed credentials.
+
+## My takes on the project
+
+This is an amazing template for an entire infrastructure, but here are the cons:
+- It has not been updated in a long time, many packages need to be updated and adjustments must be made;
+- It is costly for small projects. Using the default `mid` ECS instances, without any users, costs alone about $7/day. With API Gateway and Supabase subscription, the costs can be much smaller.
+
+If you're not building something big, it's better to avoid using this setup and opt for a simpler solution. I'll update this document with a link to a simpler setup once I have built it.
 
 [Original Repo](https://github.com/supabase-community/supabase-on-aws)
 # Supabase on AWS - CloudFormation/CDK Template
